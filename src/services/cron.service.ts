@@ -13,7 +13,7 @@ export class CronService {
 
   private static setupAutoExpiration() {
     cron.schedule("* * * * *", async () => { //cron schedule setiap menit
-      console.log("🕐 Running auto-expiration check..."); //log setiap menit
+      // console.log("🕐 Running auto-expiration check..."); //log setiap menit
       try {
         await AutoExpirationService.autoExpireTransactions();
       } catch (error) {
@@ -24,7 +24,7 @@ export class CronService {
 
   private static setupAutoCancellation() {
     cron.schedule("0 * * * *", async () => { //cron schedule setiap jam
-      console.log("🕐 Running auto-cancellation check..."); //log setiap jam
+      // console.log("🕐 Running auto-cancellation check..."); //log setiap jam
       try {
         await AutoExpirationService.autoCancelTransactions();
       } catch (error) {
