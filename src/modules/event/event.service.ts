@@ -341,4 +341,6 @@ export class EventService {
       time: `${event.startDate.toLocaleDateString()} - ${event.endDate.toLocaleDateString()}`,
     };
   };
+
 }
+

@@ -29,7 +29,10 @@ export class EventRouter {
     this.router.delete("/events/:id", this.eventController.deleteEvent);
     this.router.patch("/events/:id/publish", this.eventController.publishEvent);
     this.router.get("/my-events", this.eventController.getMyEvents);
+    
   };
+
+  
 
   getRouter = () => {
     return this.router;
