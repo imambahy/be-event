@@ -12,7 +12,25 @@ export class EventService {
 
   createEvent = async (organizerId: number, eventData: CreateEventDto) => {
     const { ticketTypes, ...eventInfo } = eventData;
+
+    // Validate date range
+    if (new Date(eventInfo.startDate) >= new Date(eventInfo.endDate)) {
+      throw new ApiError("Start date must be before end date", 400);
+    }
+
     const slug = this.generateSlug(eventInfo.title);
+
+    // Check if slug is unique
+    const existingEvent = await this.prisma.event.findFirst({
+      where: {
+        slug,
+        deletedAt: null,
+      },
+    });
+
+    if (existingEvent) {
+      throw new ApiError("Event with this title already exists. Please choose a different title.", 400);
+    }
 
     return await this.prisma.$transaction(async (tx) => {
       const event = await tx.event.create({
@@ -61,6 +79,23 @@ export class EventService {
 
     if (filters.category) {
       where.category = filters.category;
+    }
+
+    // Add status filter (upcoming/ongoing/past)
+    const now = new Date();
+    if (filters.status) {
+      switch (filters.status) {
+        case 'upcoming':
+          where.startDate = { gt: now };
+          break;
+        case 'ongoing':
+          where.startDate = { lte: now };
+          where.endDate = { gte: now };
+          break;
+        case 'past':
+          where.endDate = { lt: now };
+          break;
+      }
     }
 
     // Simple sorting by creation date (newest first)
@@ -183,8 +218,17 @@ export class EventService {
     if (!event) throw new ApiError("Event not found", 404);
 
     const updateData: any = { ...eventData };
-    if (eventData.startDate) updateData.startDate = new Date(eventData.startDate);
-    if (eventData.endDate) updateData.endDate = new Date(eventData.endDate);
+
+    // Validate date range if both dates are being updated
+    const newStartDate = eventData.startDate ? new Date(eventData.startDate) : event.startDate;
+    const newEndDate = eventData.endDate ? new Date(eventData.endDate) : event.endDate;
+
+    if (newStartDate >= newEndDate) {
+      throw new ApiError("Start date must be before end date", 400);
+    }
+
+    if (eventData.startDate) updateData.startDate = newStartDate;
+    if (eventData.endDate) updateData.endDate = newEndDate;
 
     return await this.prisma.event.update({
       where: { id },
@@ -198,6 +242,19 @@ export class EventService {
     });
 
     if (!event) throw new ApiError("Event not found", 404);
+
+    // Check if there are any DONE transactions for this event
+    const doneTransactions = await this.prisma.transaction.count({
+      where: {
+        eventId: id,
+        status: "DONE",
+        deletedAt: null,
+      },
+    });
+
+    if (doneTransactions > 0) {
+      throw new ApiError("Cannot delete event with completed transactions", 400);
+    }
 
     await this.prisma.event.update({
       where: { id },
@@ -229,6 +286,16 @@ export class EventService {
       throw new ApiError("Event start date must be in the future", 400);
     }
 
+    if (new Date(event.endDate) <= new Date()) {
+      throw new ApiError("Event end date must be in the future", 400);
+    }
+
+    // Check total available seats across all ticket types
+    const totalSeats = event.ticketTypes.reduce((sum, ticketType) => sum + ticketType.availableSeats, 0);
+    if (totalSeats <= 0) {
+      throw new ApiError("Event must have available seats before publishing", 400);
+    }
+
     return await this.prisma.event.update({
       where: { id },
       data: { published: true },
@@ -241,6 +308,19 @@ export class EventService {
     });
 
     if (!event) throw new ApiError("Event not found", 404);
+
+    // Check if there are any DONE transactions for this event
+    const doneTransactions = await this.prisma.transaction.count({
+      where: {
+        eventId: id,
+        status: "DONE",
+        deletedAt: null,
+      },
+    });
+
+    if (doneTransactions > 0) {
+      throw new ApiError("Cannot unpublish event with completed transactions", 400);
+    }
 
     return await this.prisma.event.update({
       where: { id },
@@ -308,18 +388,21 @@ export class EventService {
     const reviews = event.reviews || [];
 
     const totalReviews = reviews.length;
-    const averageRating =
+    const rawAverageRating =
       totalReviews > 0
         ? reviews.reduce((sum: number, review: any) => sum + review.rating, 0) /
           totalReviews
         : 0;
 
+    // Clamp rating to 1-5 range
+    const averageRating = Math.max(1, Math.min(5, Math.round(rawAverageRating * 10) / 10));
+
     // ✅ Calculate attendees only from DONE transactions
     const doneTransactions = await this.prisma.transaction.findMany({
-      where: { 
-        eventId: event.id, 
+      where: {
+        eventId: event.id,
         status: 'DONE',
-        deletedAt: null 
+        deletedAt: null
       },
       select: { quantity: true }
     });
@@ -333,7 +416,7 @@ export class EventService {
 
     return {
       ...event,
-      averageRating: Math.round(averageRating * 10) / 10,
+      averageRating,
       totalReviews,
       totalAttendees,
       isFree,

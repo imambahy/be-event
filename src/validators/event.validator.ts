@@ -48,6 +48,7 @@ export const validateGetEvents = [
   query("search").optional().isString().withMessage("Search must be a string"),
   query("category").optional().isString().withMessage("Category must be a string"),
   query("location").optional().isString().withMessage("Location must be a string"),
+  query("status").optional().isIn(["upcoming", "ongoing", "past"]).withMessage("Status must be upcoming, ongoing, or past"),
   query("sortBy").optional().isIn(["createdAt", "startDate", "title", "price"]).withMessage("Invalid sort option"),
   query("order").optional().isIn(["asc", "desc"]).withMessage("Order must be asc or desc"),
   query("page").optional().isInt({ min: 1 }).withMessage("Page must be a positive integer"),
