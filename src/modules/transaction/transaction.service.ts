@@ -1,15 +1,18 @@
 import { Transaction } from "../../generated/prisma";
 import { ApiError } from "../../utils/api-error";
 import { PrismaService } from "../prisma/prisma.service";
+import { MailService } from "../mail/mail.service";
 import {
   CreateTransactionDto,
 } from "../../dto/transaction.dto";
 
 export class TransactionService {
   private prisma: PrismaService;
+  private mailService: MailService;
 
   constructor() {
     this.prisma = new PrismaService();
+    this.mailService = new MailService();
   }
 
   createTransaction = async (
@@ -19,6 +22,15 @@ export class TransactionService {
   ) => {
     const { ticketTypeId, quantity, pointsUsed, couponCode, voucherCode } =
       transactionData;
+
+    // Check if user exists
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new ApiError("User not found", 404);
+    }
 
     // Check if ticket type exists and belongs to the event
     const ticketType = await this.prisma.ticketType.findFirst({
@@ -39,6 +51,11 @@ export class TransactionService {
       throw new ApiError("Event is not published", 400);
     }
 
+    // Check if event has expired
+    if (new Date(ticketType.event.endDate) < new Date()) {
+      throw new ApiError("Cannot purchase tickets for expired events", 400);
+    }
+
     // Check available seats
     if (ticketType.availableSeats < quantity) {
       throw new ApiError("Not enough available seats", 400);
@@ -46,29 +63,27 @@ export class TransactionService {
 
     // Check user points if using points
     if (pointsUsed && pointsUsed > 0) {
-      const user = await this.prisma.user.findUnique({
-        where: { id: userId },
-      });
-
-      if (!user || user.points < pointsUsed) {
+      if (user.points < pointsUsed) {
         throw new ApiError("Insufficient points", 400);
       }
     }
 
     let couponId = null;
     let voucherId = null;
+    let coupon = null;
+    let voucher = null;
     let discountAmount = 0;
 
     // Validate and apply coupon
     if (couponCode) {
-      const coupon = await this.validateCoupon(couponCode, userId);
+      coupon = await this.validateCoupon(couponCode, userId);
       couponId = coupon.id;
       discountAmount += coupon.discountValue;
     }
 
     // Validate and apply voucher
     if (voucherCode) {
-      const voucher = await this.validateVoucher(voucherCode, eventId, userId);
+      voucher = await this.validateVoucher(voucherCode, eventId, userId);
       voucherId = voucher.id;
       discountAmount += voucher.discountValue;
     }
@@ -79,10 +94,19 @@ export class TransactionService {
       totalAmount - discountAmount - (pointsUsed || 0)
     );
 
+    // Validate final amount for paid events
+    const isFreeEvent = ticketType.price === 0;
+    if (!isFreeEvent && finalAmount <= 0) {
+      throw new ApiError("Final amount must be greater than 0 for paid events", 400);
+    }
+
     return await this.prisma.$transaction(async (tx) => {
-      // Update available seats
+      // Update available seats with optimistic concurrency
       await tx.ticketType.update({
-        where: { id: ticketType.id },
+        where: {
+          id: ticketType.id,
+          availableSeats: { gte: quantity } // Optimistic lock
+        },
         data: {
           availableSeats: ticketType.availableSeats - quantity,
         },
@@ -141,26 +165,26 @@ export class TransactionService {
       }
 
       // Create user coupon/voucher records if used
-      if (couponId) {
+      if (coupon && couponId) {
         await tx.userCoupon.create({
           data: {
             userId,
             couponId,
             status: "USED",
             usedAt: new Date(),
-            expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 3 months
+            expiresAt: new Date(coupon.endDate), // Use coupon's endDate
           },
         });
       }
 
-      if (voucherId) {
+      if (voucher && voucherId) {
         await tx.userVoucher.create({
           data: {
             userId,
             voucherId,
             status: "USED",
             usedAt: new Date(),
-            expiresAt: new Date(Date.now() + 90 * 24 * 60 * 60 * 1000), // 3 months
+            expiresAt: new Date(voucher.endDate), // Use voucher's endDate
           },
         });
       }
@@ -321,8 +345,11 @@ export class TransactionService {
     const { organizerId, isAutoProcess = false } = options || {};
     const where: any = { id, deletedAt: null };
 
-    // validasi organizerId jika bukan auto-process, terus berikan organizerId
-    if (!isAutoProcess && organizerId) {
+    // validasi organizerId jika bukan auto-process
+    if (!isAutoProcess) {
+      if (!organizerId) {
+        throw new ApiError("OrganizerId is required for manual status updates", 400);
+      }
       where.organizerId = organizerId;
     }
 
@@ -371,6 +398,11 @@ export class TransactionService {
         await this.restoreResources(tx, transaction);
       }
 
+      // Send email notification for status changes
+      if (status === "DONE" || status === "REJECTED") {
+        await this.sendTransactionStatusNotification(updatedTransaction, status);
+      }
+
       return updatedTransaction;
     });
   };
@@ -397,6 +429,11 @@ export class TransactionService {
 
     if (new Date() > transaction.expiresAt) {
       throw new ApiError("Payment proof upload time has expired", 400);
+    }
+
+    // Validate status transition
+    if (!this.isValidStatusTransition(transaction.status, "WAITING_FOR_CONFIRMATION")) {
+      throw new ApiError("Invalid status transition", 400);
     }
 
     return await this.prisma.transaction.update({
@@ -432,6 +469,166 @@ export class TransactionService {
       pendingTransactions,
       completedTransactions,
       transactions,
+    };
+  };
+
+  // Get detailed statistics for dashboard
+  getDashboardStats = async (organizerId: number) => {
+    const now = new Date();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+
+    // Get all transactions for the organizer
+    const allTransactions = await this.prisma.transaction.findMany({
+      where: { organizerId, deletedAt: null },
+      include: {
+        event: {
+          select: {
+            id: true,
+            title: true,
+            startDate: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        ticketType: {
+          select: {
+            name: true,
+            price: true,
+          },
+        },
+      },
+    });
+
+    // Monthly statistics
+    const monthlyTransactions = allTransactions.filter(
+      (t) => t.createdAt >= startOfMonth
+    );
+
+    // Yearly statistics
+    const yearlyTransactions = allTransactions.filter(
+      (t) => t.createdAt >= startOfYear
+    );
+
+    // Revenue calculations
+    const totalRevenue = allTransactions
+      .filter((t) => t.status === "DONE")
+      .reduce((sum, t) => sum + t.finalAmount, 0);
+
+    const monthlyRevenue = monthlyTransactions
+      .filter((t) => t.status === "DONE")
+      .reduce((sum, t) => sum + t.finalAmount, 0);
+
+    const yearlyRevenue = yearlyTransactions
+      .filter((t) => t.status === "DONE")
+      .reduce((sum, t) => sum + t.finalAmount, 0);
+
+    // Status breakdown
+    const statusBreakdown = {
+      WAITING_FOR_PAYMENT: allTransactions.filter((t) => t.status === "WAITING_FOR_PAYMENT").length,
+      WAITING_FOR_CONFIRMATION: allTransactions.filter((t) => t.status === "WAITING_FOR_CONFIRMATION").length,
+      DONE: allTransactions.filter((t) => t.status === "DONE").length,
+      REJECTED: allTransactions.filter((t) => t.status === "REJECTED").length,
+      EXPIRED: allTransactions.filter((t) => t.status === "EXPIRED").length,
+      CANCELLED: allTransactions.filter((t) => t.status === "CANCELLED").length,
+    };
+
+    // Monthly revenue chart data (last 12 months)
+    const monthlyRevenueData = [];
+    for (let i = 11; i >= 0; i--) {
+      const monthStart = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() - i + 1, 0);
+      
+      const monthTransactions = allTransactions.filter(
+        (t) => t.createdAt >= monthStart && t.createdAt <= monthEnd && t.status === "DONE"
+      );
+      
+      const monthRevenue = monthTransactions.reduce((sum, t) => sum + t.finalAmount, 0);
+      
+      monthlyRevenueData.push({
+        month: monthStart.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+        revenue: monthRevenue,
+        transactions: monthTransactions.length,
+      });
+    }
+
+    return {
+      overview: {
+        totalTransactions: allTransactions.length,
+        totalRevenue,
+        monthlyRevenue,
+        yearlyRevenue,
+        pendingTransactions: statusBreakdown.WAITING_FOR_CONFIRMATION,
+        completedTransactions: statusBreakdown.DONE,
+      },
+      statusBreakdown,
+      monthlyRevenueData,
+      recentTransactions: allTransactions
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, 10),
+    };
+  };
+
+  // Get attendee list for an event
+  getEventAttendees = async (eventId: number, organizerId: number) => {
+    const event = await this.prisma.event.findFirst({
+      where: { id: eventId, organizerId, deletedAt: null },
+    });
+
+    if (!event) {
+      throw new ApiError("Event not found", 404);
+    }
+
+    const attendees = await this.prisma.transaction.findMany({
+      where: {
+        eventId,
+        organizerId,
+        status: "DONE",
+        deletedAt: null,
+      },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        ticketType: {
+          select: {
+            name: true,
+            price: true,
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return {
+      event: {
+        id: event.id,
+        title: event.title,
+        startDate: event.startDate,
+        endDate: event.endDate,
+      },
+      attendees: attendees.map((transaction) => ({
+        id: transaction.id,
+        userName: transaction.user.name,
+        userEmail: transaction.user.email,
+        ticketType: transaction.ticketType.name,
+        quantity: transaction.quantity,
+        unitPrice: transaction.unitPrice,
+        totalAmount: transaction.totalAmount,
+        finalAmount: transaction.finalAmount,
+        purchaseDate: transaction.createdAt,
+      })),
+      totalAttendees: attendees.reduce((sum, t) => sum + t.quantity, 0),
+      totalRevenue: attendees.reduce((sum, t) => sum + t.finalAmount, 0),
     };
   };
 
@@ -593,6 +790,40 @@ export class TransactionService {
         },
         data: { status: "ACTIVE" },
       });
+    }
+  };
+
+  // Send email notification for transaction status changes
+  private sendTransactionStatusNotification = async (transaction: any, status: string) => {
+    try {
+      const subject = status === "DONE" 
+        ? "Transaction Approved - Payment Confirmed" 
+        : "Transaction Rejected - Payment Not Confirmed";
+
+      const templateName = status === "DONE" ? "transaction-approved" : "transaction-rejected";
+
+      const context = {
+        userName: transaction.user.name,
+        eventTitle: transaction.ticketType.event.title,
+        transactionId: transaction.id,
+        quantity: transaction.quantity,
+        ticketType: transaction.ticketType.name,
+        finalAmount: transaction.finalAmount,
+        status: status,
+        date: new Date().toLocaleDateString(),
+      };
+
+      await this.mailService.sendMail(
+        transaction.user.email,
+        subject,
+        templateName,
+        context
+      );
+
+      console.log(`📧 Email notification sent to ${transaction.user.email} for transaction ${transaction.id} - Status: ${status}`);
+    } catch (error) {
+      console.error("Failed to send email notification:", error);
+      // Don't throw error to avoid breaking the transaction flow
     }
   };
 }

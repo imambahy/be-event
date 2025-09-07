@@ -38,6 +38,8 @@ export class TransactionRouter {
     // Organizer routes
     this.router.patch("/transactions/:id/status", validateUpdateTransactionStatus, this.transactionController.updateTransactionStatus);
     this.router.get("/transaction-stats", this.transactionController.getTransactionStats);
+    this.router.get("/dashboard-stats", this.transactionController.getDashboardStats);
+    this.router.get("/events/:eventId/attendees", this.transactionController.getEventAttendees);
   };
 
   getRouter = () => {

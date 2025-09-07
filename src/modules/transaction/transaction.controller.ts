@@ -137,4 +137,45 @@ export class TransactionController {
       next(error);
     }
   };
+
+  // Organizer endpoint - get dashboard stats
+  getDashboardStats = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Check if user is organizer
+      if ((req as any).user?.role !== "ORGANIZER") {
+        throw new ApiError("Only organizers can view dashboard stats", 403);
+      }
+
+      const organizerId = (req as any).user.id;
+      const result = await this.transactionService.getDashboardStats(organizerId);
+      
+      res.status(200).json({
+        message: "Dashboard stats retrieved successfully",
+        data: result
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
+
+  // Organizer endpoint - get event attendees
+  getEventAttendees = async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      // Check if user is organizer
+      if ((req as any).user?.role !== "ORGANIZER") {
+        throw new ApiError("Only organizers can view event attendees", 403);
+      }
+
+      const organizerId = (req as any).user.id;
+      const eventId = parseInt(req.params.eventId);
+      const result = await this.transactionService.getEventAttendees(eventId, organizerId);
+      
+      res.status(200).json({
+        message: "Event attendees retrieved successfully",
+        data: result
+      });
+    } catch (error) {
+      next(error);
+    }
+  };
 }
