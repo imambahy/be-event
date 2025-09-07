@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Transaction Rejected</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background-color: #f44336;
+            color: white;
+            padding: 20px;
+            text-align: center;
+            border-radius: 5px 5px 0 0;
+        }
+        .content {
+            background-color: #f9f9f9;
+            padding: 20px;
+            border-radius: 0 0 5px 5px;
+        }
+        .error-icon {
+            font-size: 48px;
+            color: #f44336;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .transaction-details {
+            background-color: white;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 10px 0;
+            padding: 5px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .detail-label {
+            font-weight: bold;
+        }
+        .refund-info {
+            background-color: #fff3cd;
+            border: 1px solid #ffeaa7;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+            color: #666;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>❌ Payment Not Confirmed</h1>
+        <p>Your transaction has been rejected</p>
+    </div>
+    
+    <div class="content">
+        <div class="error-icon">⚠️</div>
+        
+        <p>Dear <strong>{{userName}}</strong>,</p>
+        
+        <p>We regret to inform you that your payment could not be confirmed and your transaction has been rejected. This may be due to insufficient funds, incorrect payment details, or other payment-related issues.</p>
+        
+        <div class="transaction-details">
+            <h3>Transaction Details</h3>
+            <div class="detail-row">
+                <span class="detail-label">Transaction ID:</span>
+                <span>#{{transactionId}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Event:</span>
+                <span>{{eventTitle}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Ticket Type:</span>
+                <span>{{ticketType}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Quantity:</span>
+                <span>{{quantity}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Amount:</span>
+                <span>IDR {{finalAmount}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Status:</span>
+                <span style="color: #f44336; font-weight: bold;">{{status}}</span>
+            </div>
+            <div class="detail-row">
+                <span class="detail-label">Date:</span>
+                <span>{{date}}</span>
+            </div>
+        </div>
+        
+        <div class="refund-info">
+            <h4>🔄 Refund Information</h4>
+            <p>Don't worry! Any points, vouchers, or coupons used in this transaction have been automatically restored to your account. The event seats have also been released back to the available pool.</p>
+        </div>
+        
+        <p>If you believe this is an error or if you would like to try again, please contact the event organizer or create a new transaction.</p>
+        
+        <p>We apologize for any inconvenience this may cause.</p>
+    </div>
+    
+    <div class="footer">
+        <p>This is an automated message. Please do not reply to this email.</p>
+    </div>
+</body>
+</html>
